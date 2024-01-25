@@ -1,69 +1,100 @@
 import pandas as pd
-from io import StringIO
+import re
 
+def extract_tables_from_sheet(df):
+    """
+    Extract tables from the given DataFrame by using 'Measure' as table names
+    and 'Level' as row names. Skips the row if 'Measure' field is 'Measure' itself.
+    """
+    tables = {}
+    current_table = None
+    seen_tables = set()  # To keep track of already seen table names
 
-def split_tables(df):
-    # Identify the empty rows which indicate separation between tables
-    mask = df.isnull().all(axis=1)
-    tables = []
-    start = 0
-    for end in mask[mask].index:
-        tables.append(df[start:end])
-        start = end + 1
-    tables.append(df[start:])  # Append the last table
+    for i, row in df.iterrows():
+        measure, level = row[0], row[1]
+
+        # Skip the row if 'Measure' field is just 'Measure'
+        if measure == 'Measure':
+            continue
+
+        if pd.notnull(measure) and measure not in seen_tables:
+            current_table = measure
+            tables[current_table] = []
+            seen_tables.add(measure)
+        
+        if pd.notnull(level) and current_table is not None:
+            tables[current_table].append(level)
+
     return tables
 
 
-def create_config_from_dataframe(df, table_index):
-    # Extracting row names and column headings
-    row_names = df.iloc[:, 0].tolist()
-    column_headings = df.columns[1:].tolist()
 
-    # Creating the configuration structure
-    config = {
-        "table_name": f"fantasy_config_{table_index}",
-        "row_names": row_names,
-        "column_headings": column_headings,
-    }
+def create_configs_from_tables(tables, sheet_name):
+    """
+    Create configurations from the extracted tables. Each config will have a 
+    'placeholder_text' dictionary with keys as row names and values as 'todo'.
+    """
+    configs = []
+    for table_name, row_names in tables.items():
+        # Creating a placeholder_text dictionary
+        placeholder_text = {row_name: "todo" for row_name in row_names}
 
-    return config
+        config = {
+            "sheet_name": sheet_name,
+            "table_name": table_name,
+            "row_names": row_names,
+            "placeholder_text": placeholder_text
+        }
+        configs.append(config)
+    return configs
 
+
+def valid_python_identifier(name):
+    """
+    Converts a name to a valid Python identifier by removing or replacing invalid characters.
+    """
+    # Replace spaces and invalid characters with underscores
+    name = re.sub(r'\W|^(?=\d)', '_', name)
+    return name
 
 def write_config_to_file(config, filename):
-    with open(filename, "a") as file:  # 'a' for append mode
-        file.write(f'{config["table_name"]} = ')
+    """
+    Writes a configuration dictionary to a file as a Python variable.
+    """
+    with open(filename, "a") as file:
+        # Convert the table name to a valid Python identifier
+        var_name = valid_python_identifier(config["table_name"])
+        file.write(f'{var_name} = ')
         file.write(str(config))
         file.write("\n\n")
 
+def main(file_path='MymupMonthly1.xlsx'):
+    xls = pd.ExcelFile(file_path)
+    all_configs = []
+    config_variable_names = []  # List to store the names of config variables
 
-def main():
-    # Sample fantasy/sci-fi themed data
-    excel_data = StringIO(
-        """
-Starship,Class,Max Speed,Crew Capacity,Galaxy
-Odyssey,Explorer,9.5 Warp,1000,Andromeda
-Eclipse,Stealth,8.7 Warp,300,Milky Way
-Nebula,Carrier,7.8 Warp,5000,Triangulum
+    for sheet_name in xls.sheet_names:
+        df = pd.read_excel(xls, sheet_name=sheet_name)
 
-Creature,Origin Realm,Power Level,Alignment,Notable Feature
-Dragon,Mythica,High,Chaotic,Fire-Breathing
-Phoenix,Aether,Medium,Neutral,Rebirth
-Unicorn,Enchanted,Low,Good,Healing Powers
-"""
-    )
+        # Extract tables from the sheet
+        tables = extract_tables_from_sheet(df)
 
-    # Read the data into a DataFrame
-    df = pd.read_csv(excel_data)
+        # Create configurations for each table
+        configs = create_configs_from_tables(tables, sheet_name)
+        all_configs.extend(configs)
 
-    # Split the DataFrame into individual tables
-    tables = split_tables(df)
+    # Write configs to a file and accumulate config variable names
+    with open("data_config.py", "a") as file:
+        for config in all_configs:
+            var_name = valid_python_identifier(config["table_name"])
+            file.write(f'{var_name} = ')
+            file.write(str(config))
+            file.write("\n\n")
+            config_variable_names.append(var_name)  # Add the variable name directly
 
-    # Process each table and write config to a file
-    for i, table in enumerate(tables):
-        if not table.empty:
-            config = create_config_from_dataframe(table, i)
-            write_config_to_file(config, "fantasy_config.py")
-
+        # Construct the line for all_configs and write it
+        all_configs_line = f'all_configs = [{", ".join(config_variable_names)}]'
+        file.write(all_configs_line)
 
 if __name__ == "__main__":
     main()
